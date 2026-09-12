@@ -45,7 +45,7 @@ class TelemetryRepository:
                 :quality,
                 :schema_version
             )
-            ON CONFLICT (event_id) DO NOTHING
+            ON CONFLICT (event_id, observed_at) DO NOTHING
             """
         )
 
