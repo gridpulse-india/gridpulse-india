@@ -1,3 +1,4 @@
+import os
 from datetime import date
 from pathlib import Path
 
@@ -10,7 +11,7 @@ FIXTURE_PATH = Path("tests/fixtures/grid_india/psp_2026-08-19_15min.csv")
 
 
 def test_psp_fixture_is_inserted_into_database() -> None:
-    database_url = "postgresql+psycopg://grid_app:change_me@localhost:5433/gridpulse"
+    database_url = os.environ["DATABASE_URL"]
 
     csv_text = FIXTURE_PATH.read_text(encoding="utf-8")
 
