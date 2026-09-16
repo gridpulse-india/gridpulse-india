@@ -1,0 +1,318 @@
+{
+  "schema_version": 1,
+  "contract_id": "gridpulse-architecture-boundaries",
+  "contract_status": "accepted",
+  "baseline": {
+    "frozen_day": "D16",
+    "migration_revision": "61d478c2ade3",
+    "runtime_style": "modular-monolith",
+    "database": "postgresql-timescaledb",
+    "critical_path": [
+      "external-grid-source",
+      "source-http-client",
+      "grid-india-parser",
+      "canonical-telemetry",
+      "telemetry-repository",
+      "timescaledb"
+    ]
+  },
+  "planes": {
+    "data": {
+      "purpose": "Acquire, persist, read and deliver telemetry.",
+      "must_continue_when_control_plane_is_unavailable": true
+    },
+    "control": {
+      "purpose": "Change how the platform behaves through configuration, metadata, replay and operator actions.",
+      "may_interrupt_existing_valid_data_plane_configuration": false
+    }
+  },
+  "service_extraction_criteria": [
+    "independent-state-ownership",
+    "independent-scaling-requirement",
+    "independent-security-boundary",
+    "independent-failure-domain",
+    "independent-deployment-lifecycle"
+  ],
+  "components": [
+    {
+      "id": "ingestion-runtime",
+      "plane": "data",
+      "status": "existing",
+      "deployment": "modular-monolith",
+      "state_owner": "timescaledb-and-process-local-runtime-state",
+      "idempotency_boundary": "event_id+observed_at",
+      "concurrency_model": "single-current-runtime-with-future-source-level-scaling",
+      "rollback_replay_semantics": "restart-safe-through-deterministic-event-identity-and-idempotent-database-inserts",
+      "failure_domain": "source-acquisition-parsing-and-telemetry-write",
+      "scale_trigger": "source-count-fetch-frequency-or-independent-worker-throughput",
+      "security_boundary": "external-source-egress-and-database-write-role",
+      "dependencies": [
+        "external-grid-source",
+        "timescaledb"
+      ],
+      "graceful_degradation": "a-source-failure-must-be-explicitly-unhealthy-or-stale-and-must-not-create-invalid-telemetry",
+      "extraction_trigger": "independent-source-scheduling-worker-scaling-or-failure-isolation"
+    },
+    {
+      "id": "timescaledb",
+      "plane": "data",
+      "status": "existing",
+      "deployment": "database",
+      "state_owner": "canonical-telemetry",
+      "idempotency_boundary": "unique-event_id+observed_at",
+      "concurrency_model": "database-managed-concurrent-read-write",
+      "rollback_replay_semantics": "schema-changes-through-alembic-and-telemetry-replay-through-idempotent-inserts",
+      "failure_domain": "canonical-telemetry-persistence",
+      "scale_trigger": "row-count-chunk-count-query-cost-or-write-throughput",
+      "security_boundary": "database-roles-and-network-access",
+      "dependencies": [
+        "persistent-storage"
+      ],
+      "graceful_degradation": "database-unavailability-must-be-explicit-and-must-never-be-represented-as-successful-persistence",
+      "extraction_trigger": "not-applicable-database-already-owns-persistent-telemetry-state"
+    },
+    {
+      "id": "query-api",
+      "plane": "data",
+      "status": "planned",
+      "deployment": "not-yet-extracted",
+      "state_owner": "none-read-only-boundary",
+      "idempotency_boundary": "read-only",
+      "concurrency_model": "independently-scalable-stateless-readers",
+      "rollback_replay_semantics": "stateless-service-rollback-without-telemetry-mutation",
+      "failure_domain": "telemetry-read-serving",
+      "scale_trigger": "read-request-rate-query-cost-or-latency-budget",
+      "security_boundary": "public-or-consumer-read-api",
+      "dependencies": [
+        "timescaledb"
+      ],
+      "graceful_degradation": "return-explicit-unavailable-stale-or-partial-state-rather-than-fabricated-live-data",
+      "extraction_trigger": "independent-read-scaling-security-policy-or-read-failure-isolation"
+    },
+    {
+      "id": "realtime-gateway",
+      "plane": "data",
+      "status": "planned",
+      "deployment": "not-yet-extracted",
+      "state_owner": "ephemeral-client-connections-and-subscriptions",
+      "idempotency_boundary": "future-message-sequence-or-cursor",
+      "concurrency_model": "connection-and-fanout-oriented-horizontal-scaling",
+      "rollback_replay_semantics": "clients-reconnect-and-resume-from-defined-cursor-or-refresh-state",
+      "failure_domain": "live-client-delivery",
+      "scale_trigger": "connection-count-message-rate-fanout-or-client-queue-pressure",
+      "security_boundary": "public-realtime-session-boundary",
+      "dependencies": [
+        "future-live-telemetry-source"
+      ],
+      "graceful_degradation": "live-delivery-can-fail-without-corrupting-ingestion-or-canonical-storage",
+      "extraction_trigger": "independent-websocket-scaling-or-realtime-failure-isolation"
+    },
+    {
+      "id": "control-api",
+      "plane": "control",
+      "status": "planned",
+      "deployment": "not-yet-extracted",
+      "state_owner": "future-versioned-control-metadata",
+      "idempotency_boundary": "future-control-command-id-or-version-precondition",
+      "concurrency_model": "optimistic-versioned-control-mutations",
+      "rollback_replay_semantics": "restore-prior-valid-config-version-and-preserve-audit-history",
+      "failure_domain": "operator-and-configuration-control",
+      "scale_trigger": "control-workload-security-isolation-or-operator-concurrency",
+      "security_boundary": "privileged-authenticated-control-surface",
+      "dependencies": [
+        "future-control-metadata-store"
+      ],
+      "graceful_degradation": "existing-data-plane-must-continue-on-last-known-valid-configuration-when-safe",
+      "extraction_trigger": "durable-control-state-privileged-authorization-or-independent-control-failure-domain"
+    }
+  ],
+  "baseline_traceability": [
+    {
+      "d16_component": "poller",
+      "current_owner": "services/ingestion",
+      "target_boundary": "ingestion-runtime"
+    },
+    {
+      "d16_component": "source-http-client",
+      "current_owner": "services/ingestion",
+      "target_boundary": "ingestion-runtime"
+    },
+    {
+      "d16_component": "grid-india-parser",
+      "current_owner": "services/ingestion",
+      "target_boundary": "ingestion-runtime"
+    },
+    {
+      "d16_component": "canonical-telemetry-model",
+      "current_owner": "services/ingestion",
+      "target_boundary": "ingestion-runtime"
+    },
+    {
+      "d16_component": "telemetry-repository",
+      "current_owner": "services/ingestion",
+      "target_boundary": "ingestion-runtime"
+    },
+    {
+      "d16_component": "source-health-tracker",
+      "current_owner": "services/ingestion",
+      "target_boundary": "ingestion-runtime"
+    },
+    {
+      "d16_component": "telemetry-hypertable",
+      "current_owner": "postgresql-timescaledb",
+      "target_boundary": "timescaledb"
+    }
+  ],
+  "communication": [
+    {
+      "from": "ingestion-runtime",
+      "to": "external-grid-source",
+      "mode": "synchronous-http",
+      "status": "existing",
+      "timeout_owner": "ingestion-runtime",
+      "retry_owner": "ingestion-runtime"
+    },
+    {
+      "from": "ingestion-runtime",
+      "to": "timescaledb",
+      "mode": "synchronous-sql",
+      "status": "existing",
+      "timeout_owner": "ingestion-runtime",
+      "retry_owner": "caller-with-idempotent-write-semantics"
+    },
+    {
+      "from": "public-web",
+      "to": "query-api",
+      "mode": "synchronous-https",
+      "status": "planned",
+      "timeout_owner": "public-web",
+      "retry_owner": "bounded-client-policy"
+    },
+    {
+      "from": "public-web",
+      "to": "realtime-gateway",
+      "mode": "asynchronous-websocket",
+      "status": "planned",
+      "timeout_owner": "realtime-gateway",
+      "retry_owner": "client-reconnect-policy"
+    },
+    {
+      "from": "control-center",
+      "to": "control-api",
+      "mode": "synchronous-https",
+      "status": "planned",
+      "timeout_owner": "control-center",
+      "retry_owner": "explicit-operator-safe-policy"
+    }
+  ],
+  "event_backbone": {
+    "status": "deferred",
+    "earliest_planned_day": "D50",
+    "reason": "do-not-introduce-event-infrastructure-before-multiple-producers-consumers-replay-and-asynchronous-isolation-justify-it"
+  },
+  "observability_contract": {
+    "correlation_id": {
+      "status": "required-across-future-boundaries",
+      "purpose": "trace-one-request-or-operation-across-service-boundaries"
+    },
+    "request_id": {
+      "status": "existing-or-boundary-generated",
+      "purpose": "identify-an-individual-http-request"
+    },
+    "run_id": {
+      "status": "required-for-ingestion-jobs",
+      "purpose": "identify-one-ingestion-execution"
+    },
+    "required_signals": [
+      "latency",
+      "success-total",
+      "error-total",
+      "dependency-health",
+      "freshness-or-lag",
+      "resource-consumption"
+    ]
+  },
+  "budgets": {
+    "status": "provisional-design-targets-not-measured-production-slos",
+    "ingestion": {
+      "upstream_request_timeout_seconds": 10,
+      "max_http_attempts": 3,
+      "freshness_budget": "defined-per-source-cadence-and-made-explicit-when-stale",
+      "availability_budget": "measured-per-source-so-one-source-outage-does-not-imply-total-platform-outage",
+      "recovery_budget": "restart-must-not-create-duplicate-canonical-identities-or-corrupt-existing-telemetry"
+    },
+    "query": {
+      "current_value_p95_target_ms": 250,
+      "bounded_history_p95_target_ms": 1000,
+      "freshness_budget": "response-must-carry-freshness-state",
+      "availability_budget": "query-failure-must-not-stop-ingestion",
+      "recovery_budget": "stateless-instance-can-restart-without-data-repair",
+      "measured": false
+    },
+    "realtime": {
+      "publish_to_client_p95_target_ms": 1000,
+      "freshness_budget": "stale-live-data-must-be-explicit",
+      "availability_budget": "realtime-failure-must-not-stop-ingestion-or-persisted-query-path",
+      "recovery_budget": "client-reconnect-semantics-must-be-defined",
+      "measured": false
+    },
+    "control": {
+      "freshness_budget": "operators-must-see-config-version-being-used",
+      "availability_budget": "temporary-control-plane-outage-must-not-automatically-stop-safe-data-plane-processing",
+      "recovery_budget": "restore-last-known-valid-version-with-auditable-history",
+      "measured": false
+    }
+  },
+  "monorepo_ownership": [
+    {
+      "path": "services/ingestion/",
+      "owner": "ingestion-runtime",
+      "status": "existing"
+    },
+    {
+      "path": "services/query-api/",
+      "owner": "query-api",
+      "status": "planned"
+    },
+    {
+      "path": "services/realtime-gateway/",
+      "owner": "realtime-gateway",
+      "status": "planned"
+    },
+    {
+      "path": "services/control-api/",
+      "owner": "control-api",
+      "status": "planned"
+    },
+    {
+      "path": "apps/public-web/",
+      "owner": "public-web",
+      "status": "planned"
+    },
+    {
+      "path": "apps/control-center/",
+      "owner": "control-center",
+      "status": "planned"
+    },
+    {
+      "path": "docs/architecture/",
+      "owner": "architecture-governance",
+      "status": "existing"
+    },
+    {
+      "path": "docs/adr/",
+      "owner": "architecture-governance",
+      "status": "existing"
+    },
+    {
+      "path": "infra/compose/",
+      "owner": "runtime-topology",
+      "status": "planned"
+    },
+    {
+      "path": "tests/integration/",
+      "owner": "cross-boundary-verification",
+      "status": "existing"
+    }
+  ]
+}
